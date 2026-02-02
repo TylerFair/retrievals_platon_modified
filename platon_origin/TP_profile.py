@@ -57,18 +57,16 @@ class Profile:
             assert(False)
 
     def set_from_arrays(self, P_profile, T_profile):
-        """Optimized to use cached log pressures"""
         P_profile = xp.array(P_profile)
         T_profile = xp.array(T_profile)
         log_P_profile = xp.log10(P_profile)
         self.temperatures = xp.interp(self._log_pressures, log_P_profile, T_profile)
 
     def set_isothermal(self, T_day):
-        """Optimized to use pre-allocated array"""
         self.temperatures = xp.full(self._num_layers, T_day, dtype=xp.float64)
 
     def set_parametric(self, T0, P1, alpha1, alpha2, P2, P3):
-        """Vectorized parametric model - MAJOR SPEEDUP"""
+        '''Parametric model from https://arxiv.org/pdf/0910.1347.pdf'''
         log_P = self._log_pressures
         log_P0 = xp.log10(xp.amin(self.pressures))
         log_P1 = xp.log10(P1)
@@ -95,6 +93,7 @@ class Profile:
         log_P_top = xp.log10(xp.amin(self.pressures))
         log_P_bottom = xp.log10(xp.amax(self.pressures))
         self.temperatures = xp.interp(log_P, xp.array([log_P_top, log_P_bottom]), xp.array([T_top, T_bottom]))
+    
     def set_from_opacity(self, T_irr, info_dict, visible_cutoff=0.8e-6, T_int=100):
         """Optimized opacity-based temperature profile"""
         wavelengths = xp.array(info_dict["unbinned_wavelengths"])
@@ -150,7 +149,7 @@ class Profile:
 
     def set_from_radiative_solution(self, T_star, Rs, a, Mp, Rp, beta, log_k_th, 
                                     log_gamma, log_gamma2=None, alpha=0, T_int=100):
-        """Optimized radiative solution - vectorized calculations"""
+        '''From Line et al. 2013: http://adsabs.harvard.edu/abs/2013ApJ...775..137L, Equation 13 - 16'''
         k_th = 10.0 ** log_k_th
         gamma = 10.0 ** log_gamma
         gamma2 = 10.0 ** log_gamma2 if log_gamma2 is not None else None
