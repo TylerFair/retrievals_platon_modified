@@ -8,12 +8,10 @@ from .constants import h, c, k_B, AMU, G
 from .params import NUM_LAYERS, MIN_P, MAX_P
 
 class Profile:
-    # Class-level cache for commonly used arrays
     _pressure_cache = {}
     _log_pressure_cache = {}
     
     def __init__(self):
-        # Cache the pressure array since it's constant
         cache_key = (NUM_LAYERS, MIN_P, MAX_P)
         if cache_key not in Profile._pressure_cache:
             Profile._pressure_cache[cache_key] = xp.logspace(
@@ -67,33 +65,26 @@ class Profile:
 
     def set_isothermal(self, T_day):
         """Optimized to use pre-allocated array"""
-        # Use full instead of ones * value for efficiency
         self.temperatures = xp.full(self._num_layers, T_day, dtype=xp.float64)
 
     def set_parametric(self, T0, P1, alpha1, alpha2, P2, P3):
         """Vectorized parametric model - MAJOR SPEEDUP"""
-        # Cache log values to avoid repeated computation
         log_P = self._log_pressures
         log_P0 = xp.log10(xp.amin(self.pressures))
         log_P1 = xp.log10(P1)
         log_P2 = xp.log10(P2)
         log_P3 = xp.log10(P3)
         
-        # Pre-compute temperature boundaries
         T1 = T0 + ((log_P1 - log_P0) / alpha1) ** 2
         T2 = T1 - ((log_P1 - log_P2) / alpha2) ** 2
         T3 = T2 + ((log_P3 - log_P2) / alpha2) ** 2
-        
-        # Vectorized temperature calculation using where/select
-        # This replaces the loop entirely
+
         mask_region1 = log_P < log_P1
         mask_region2 = (log_P >= log_P1) & (log_P < log_P3)
         mask_region3 = log_P >= log_P3
         
-        # Pre-allocate result array
         self.temperatures = xp.empty(self._num_layers, dtype=xp.float64)
         
-        # Vectorized computation for each region
         self.temperatures[mask_region1] = T0 + ((log_P[mask_region1] - log_P0) / alpha1) ** 2
         self.temperatures[mask_region2] = T2 + ((log_P[mask_region2] - log_P2) / alpha2) ** 2
         self.temperatures[mask_region3] = T3
@@ -106,7 +97,6 @@ class Profile:
         self.temperatures = xp.interp(log_P, xp.array([log_P_top, log_P_bottom]), xp.array([T_top, T_bottom]))
     def set_from_opacity(self, T_irr, info_dict, visible_cutoff=0.8e-6, T_int=100):
         """Optimized opacity-based temperature profile"""
-        # Convert to arrays once
         wavelengths = xp.array(info_dict["unbinned_wavelengths"])
         stellar_spectrum = xp.array(info_dict["stellar_spectrum"])
         planet_spectrum = xp.array(info_dict["planet_spectrum"])
@@ -115,15 +105,12 @@ class Profile:
         P_profile = xp.array(info_dict["P_profile"])
         T_profile = xp.array(info_dict["T_profile"])
         
-        # Compute wavelength differences efficiently
         d_lambda = xp.diff(wavelengths)
-        d_lambda = xp.concatenate([d_lambda[:1], d_lambda])  # Faster than append
+        d_lambda = xp.concatenate([d_lambda[:1], d_lambda])  
         
-        # Convert spectra (vectorized operations)
         stellar_spectrum_energy = stellar_spectrum * h * c / wavelengths
         planet_spectrum_energy = planet_spectrum * d_lambda
         
-        # Create boolean masks once
         visible_mask = wavelengths < visible_cutoff
         thermal_mask = ~visible_mask
         
@@ -148,7 +135,7 @@ class Profile:
         d_taus = sigma_th * intermediate_n * dr
         taus = xp.cumsum(d_taus)
         
-        # Temperature calculation (vectorized)
+        # Temperature calculation
         gamma_taus = gamma * taus
         exp_term = xp.exp(-gamma_taus)
         e2 = expn(2, gamma_taus)
@@ -164,38 +151,31 @@ class Profile:
     def set_from_radiative_solution(self, T_star, Rs, a, Mp, Rp, beta, log_k_th, 
                                     log_gamma, log_gamma2=None, alpha=0, T_int=100):
         """Optimized radiative solution - vectorized calculations"""
-        # Convert logs once
         k_th = 10.0 ** log_k_th
         gamma = 10.0 ** log_gamma
         gamma2 = 10.0 ** log_gamma2 if log_gamma2 is not None else None
         
-        # Pre-compute constants
         g = G * Mp / Rp**2
         T_eq = beta * xp.sqrt(Rs / (2*a)) * T_star
         taus = k_th * self.pressures / g
         
-        # Pre-compute T_eq^4 and T_int^4
         T_eq4 = T_eq ** 4
         T_int4 = T_int ** 4
         
-        # Vectorized incoming stream calculation
         def incoming_stream_contribution(gamma_val):
             gamma_taus = gamma_val * taus
             exp_term = xp.exp(-gamma_taus)
             expn_term = expn(2, gamma_taus)
             
-            # Fully vectorized computation
             term1 = 2.0/3
             term2 = 2.0/(3*gamma_val) * (1 + (gamma_taus/2 - 1) * exp_term)
             term3 = 2*gamma_val/3 * (1 - taus**2/2) * expn_term
             
             return 0.75 * T_eq4 * (term1 + term2 + term3)
         
-        # Main temperature calculation
         e1 = incoming_stream_contribution(gamma)
         T4 = 0.75 * T_int4 * (2.0/3 + taus) + (1 - alpha) * e1
         
-        # Add second gamma contribution if present
         if gamma2 is not None:
             e2 = incoming_stream_contribution(gamma2)
             T4 += alpha * e2
