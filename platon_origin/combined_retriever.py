@@ -24,7 +24,8 @@ from ._output_writer import write_param_estimates_file
 from .TP_profile import Profile
 from .retrieval_result import RetrievalResult
 from .custom_dynesty_result import CustomDynestyResult
-import ultranest 
+from platon.abundance_getter import AbundanceGetter
+
 
 class CombinedRetriever:
     def pretty_print(self, fit_info):
@@ -52,7 +53,7 @@ class CombinedRetriever:
             elif abs(value) < 1e4: format_str = "{:.2f}"
             else: format_str = "{:.2e}"
 
-            if name in ["offset_transit", "offset_eclipse"]:
+            if name in ["offset_transit", "offset_niriss", "offset_miri", "offset_eclipse"]:
                 unit = "ppm"
                 value *= 1e6
             
@@ -65,8 +66,8 @@ class CombinedRetriever:
     def _filter_absorption_data(self, fit_info, transit_calc, eclipse_calc):
         """
         A context manager to temporarily filter the absorption data for free
-        retrievals. This avoids state pollution by ensuring the original data is
-        always restored.
+        retrievals. Basically, we drop all species not considered so we don't
+        have to check for them ever. 
         """
         original_transit_abs_data = transit_calc.atm.absorption_data
         original_eclipse_abs_data = eclipse_calc.atm.absorption_data if eclipse_calc else None
@@ -133,7 +134,6 @@ class CombinedRetriever:
         vmrs_with_bkg = np.exp(clrs_with_bkg + np.log(geometric_mean))
         assert(np.around(np.sum(vmrs_with_bkg), decimals=5) == 1)
         return vmrs_with_bkg
-    
     def _ln_like(self, params, transit_calc, eclipse_calc, fit_info, measured_transit_depths,
                  measured_transit_errors, measured_eclipse_depths,
                  measured_eclipse_errors, ret_best_fit=False,
@@ -164,6 +164,8 @@ class CombinedRetriever:
         part_size = 10.**params_dict["log_part_size"]
         P_quench = 10.** params_dict["log_P_quench"]
         CH4_mult = 10.**params_dict["log_CH4_mult"]
+        log_SO2 = params_dict['log_SO2']
+        log_CH4 = params_dict['log_CH4']
 
         if params_dict["fit_vmr"]:
             assert(logZ is None and CO_ratio is None)
@@ -208,7 +210,10 @@ class CombinedRetriever:
                     transit_wavelengths, calculated_transit_depths, transit_info_dict = transit_calc.compute_depths_patchy(
                         t_p_profile, Rs, Mp, Rp,
                         cloud_cov_frac=cloud_cov_frac,
-                        logZ=logZ, CO_ratio=CO_ratio, CH4_mult=CH4_mult, gases=gases, vmrs=vmrs,
+                        logZ=logZ, CO_ratio=CO_ratio,
+                        custom_abundances=None,
+                        CH4_mult=CH4_mult, gases=gases, vmrs=vmrs,
+                        log_SO2=log_SO2, log_CH4=log_CH4,
                         scattering_factor=scatt_factor, scattering_slope=scatt_slope,
                         cloudtop_pressure=cloudtop_P, T_star=T_star,
                         T_spot=T_spot, spot_cov_frac=spot_cov_frac,
@@ -218,13 +223,15 @@ class CombinedRetriever:
                     transit_wavelengths, calculated_transit_depths, transit_info_dict = transit_calc.compute_depths(
                         t_p_profile, Rs, Mp, Rp, logZ, CO_ratio, CH4_mult, gases, vmrs,
                         custom_abundances=None,
+                        log_SO2=log_SO2, log_CH4=log_CH4,
                         scattering_factor=scatt_factor, scattering_slope=scatt_slope,
                         cloudtop_pressure=cloudtop_P, T_star=T_star,
                         T_spot=T_spot, spot_cov_frac=spot_cov_frac,
                         frac_scale_height=frac_scale_height, number_density=number_density,
                         part_size=part_size, ri=ri, P_quench=P_quench, full_output=ret_best_fit, zero_opacities=zero_opacities)
                     
-                calculated_transit_depths[params_dict["offset_start"] : params_dict["offset_end"]] += params_dict["offset_transit"]
+                #calculated_transit_depths[0 : 115] += params_dict["offset_niriss"]
+                #calculated_transit_depths[276: 317] += params_dict["offset_miri"]
                 residuals = calculated_transit_depths - measured_transit_depths
                 scaled_errors = error_multiple * measured_transit_errors
                 ln_likelihood = np.append(ln_likelihood, -0.5 * (residuals**2 / scaled_errors**2 + np.log(2 * np.pi * scaled_errors**2)))
@@ -408,6 +415,7 @@ class CombinedRetriever:
                 retrieval_result.random_TP_profiles.append(np.array([eclipse_info["P_profile"], eclipse_info["T_profile"]]))
             retrieval_result.pointwise_lnlikes.append(self.params_to_lnlike[tuple(params)])
         retrieval_result.loo_total, retrieval_result.loos, retrieval_result.loo_ks = psisloo(np.array(retrieval_result.pointwise_lnlikes))
+
         return retrieval_result
 
     def _get_divisors_labels(self, medians, labels):
@@ -571,7 +579,7 @@ class CombinedRetriever:
 
         #Calculate LOO-CV scores
         retrieval_result.loo_total, retrieval_result.loos, retrieval_result.loo_ks = psisloo(np.array(retrieval_result.pointwise_lnlikes))
-                    
+
         return retrieval_result
 
 
@@ -581,6 +589,7 @@ class CombinedRetriever:
                       include_condensation=True, rad_method="xsec",
                       maxiter=None, maxcall=None, nlive=250,
                       num_final_samples=1000, zero_opacities=[],
+                      basename=False, resume=False, dump_callback=None,
                       **dynesty_kwargs):
         import pymultinest
         
@@ -620,10 +629,14 @@ class CombinedRetriever:
             return ln_like
 
         num_dim = fit_info._get_num_fit_params()
-        basename = "multinest_" + str(np.random.randint(1000))
+        if not basename:
+            basename = "multinest_" + str(np.random.randint(1000))
+        else:
+            pass
         with self._filter_absorption_data(fit_info, transit_calc, eclipse_calc):
             result = pymultinest.solve(LogLikelihood=multinest_ln_like, Prior=transform_prior,
-                                    n_dims=num_dim, outputfiles_basename=basename, verbose=True, resume=False, n_live_points=nlive)
+                                    n_dims=num_dim, outputfiles_basename=basename, verbose=True,
+                                    resume=resume, n_live_points=nlive, dump_callback=dump_callback)
         a = pymultinest.Analyzer(outputfiles_basename=basename, n_params=num_dim)
         data = a.get_data()
         result["samples"] = data[:,2:]
@@ -696,6 +709,7 @@ class CombinedRetriever:
 
         #Calculate LOO-CV scores
         retrieval_result.loo_total, retrieval_result.loos, retrieval_result.loo_ks = psisloo(np.array(retrieval_result.pointwise_lnlikes))
+
         return retrieval_result
 
     def run_ultranest(self, transit_bins, transit_depths, transit_errors,
@@ -723,25 +737,20 @@ class CombinedRetriever:
         def transform_prior(cube):
             params = fit_info.fit_param_names
             
-            # UltraNest always passes arrays, handle vectorized case
             if cube.ndim == 1:
-                # Single sample case (though rarely called)
                 transformed = np.zeros(len(cube))
                 for i in range(len(params)):
                     transformed[i] = fit_info._from_unit_interval(i, cube[i])
                 return transformed
             else:
-                # Vectorized case: cube is (n_samples, n_params)
-                # Must return same shape
+
                 transformed = np.zeros_like(cube)
-                for j in range(cube.shape[0]):  # loop over samples
-                    for i in range(len(params)):  # loop over parameters
+                for j in range(cube.shape[0]):  
+                    for i in range(len(params)):  
                         transformed[j, i] = fit_info._from_unit_interval(i, cube[j, i])
                 return transformed
     
         def ultranest_ln_like(params):
-            # params is now an array, not a dict
-            # Just use it directly since it's already in the right format
             lnlike_per_point = self._ln_like(params, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
                                     eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=True)
             if not np.isscalar(lnlike_per_point):
@@ -772,7 +781,7 @@ class CombinedRetriever:
         
             result = sampler.run(min_num_live_points=nlive)
         samples = result['samples']
-        logl = result['weighted_samples']['logl']  # Correct way to access logl
+        logl = result['weighted_samples']['logl'] 
         
         best_params_arr = samples[np.argmax(logl)]
         
@@ -835,6 +844,7 @@ class CombinedRetriever:
     
         #Calculate LOO-CV scores
         retrieval_result.loo_total, retrieval_result.loos, retrieval_result.loo_ks = psisloo(np.array(retrieval_result.pointwise_lnlikes))
+
         return retrieval_result
         
 
@@ -848,8 +858,8 @@ class CombinedRetriever:
                              log_number_density=-np.inf, log_part_size=-6,
                              n=None, log_k=-np.inf,
                              log_P_quench=-99,
-                             offset_transit=0, offset_eclipse=0, offset_start=0, offset_end=sys.maxsize,
-                             fit_vmr=False, fit_clr=False,
+                             offset_transit=0,offset_niriss=0, offset_miri=0, offset_eclipse=0, offset_start=0, offset_end=sys.maxsize,
+                             fit_vmr=False, fit_clr=False,log_SO2=-10, log_CH4=-10,
                              profile_type = 'isothermal', **profile_kwargs):
         '''Get a :class:`.FitInfo` object filled with best guess values.  A few
         parameters are required, but others can be set to default values if you
@@ -894,4 +904,6 @@ class CombinedRetriever:
         
         fit_info = FitInfo(all_variables)
         return fit_info
+
+
 
