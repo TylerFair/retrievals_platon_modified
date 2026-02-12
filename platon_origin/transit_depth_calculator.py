@@ -9,7 +9,6 @@ from .abundance_getter import AbundanceGetter
 from ._species_data_reader import read_species_data
 from . import _interpolator_3D
 from ._tau_calculator import get_line_of_sight_tau
-from ._binning_optimized import bin_ktables_vectorized
 from .constants import k_B, AMU, M_sun, Teff_sun, G, h, c
 from ._get_data import get_data
 from ._mie_cache import MieCache
@@ -34,9 +33,6 @@ class TransitDepthCalculator:
             "xsec" for opacity sampling, "ktables" for correlated k
         '''
         self.atm = AtmosphereSolver(include_condensation, ref_pressure, method, include_opacities, downsample)
-        self._xsec_bin_bounds = None
-        self._xsec_bin_left_indices = None
-        self._xsec_bin_right_indices = None
 
     def change_wavelength_bins(self, bins):
         """Specify wavelength bins, instead of using the full wavelength grid
@@ -58,34 +54,34 @@ class TransitDepthCalculator:
             which is not supported.
         """
         self.atm.change_wavelength_bins(bins)
-        self._xsec_bin_bounds = None
-        self._xsec_bin_left_indices = None
-        self._xsec_bin_right_indices = None
-        if self.atm.wavelength_bins is not None and self.atm.method == "xsec":
-            self._xsec_bin_bounds = []
-            for start, end in self.atm.wavelength_bins:
-                left = int(xp.cpu(xp.searchsorted(self.atm.lambda_grid, start)))
-                right = int(xp.cpu(xp.searchsorted(self.atm.lambda_grid, end)))
-                self._xsec_bin_bounds.append((left, right))
-            left_indices = [pair[0] for pair in self._xsec_bin_bounds]
-            right_indices = [pair[1] for pair in self._xsec_bin_bounds]
-            self._xsec_bin_left_indices = xp.asarray(left_indices, dtype=int)
-            self._xsec_bin_right_indices = xp.asarray(right_indices, dtype=int)
         
 
     def _get_binned_corrected_depths(self, depths, T_star, T_spot,
                                      spot_cov_frac, blackbody=False, n_gauss=10):
-        depths = xp.asarray(depths)
-        unbinned_lambdas = self.atm.lambda_grid
+        depths = xp.cpu(depths)
+        unbinned_lambdas = xp.cpu(self.atm.lambda_grid)
         stellar_spectrum, correction_factors = self.atm.get_stellar_spectrum(
             T_star, T_spot, spot_cov_frac, blackbody)
+        stellar_spectrum = xp.cpu(stellar_spectrum)
+        correction_factors = xp.cpu(correction_factors)
         
         #Step 1: do a first binning if using k-coeffs; first binning is a
         #no-op otherwise
         if self.atm.method == "ktables":
-            _, weights = scipy.special.roots_legendre(n_gauss)
-            weights = xp.asarray(weights / 2)
-            intermediate_depths = bin_ktables_vectorized(depths, weights, n_gauss)
+            #Do a first binning based on ktables
+            points, weights = scipy.special.roots_legendre(n_gauss)
+            percentiles = 100 * (points + 1) / 2
+            weights /= 2
+            assert(len(depths) % n_gauss == 0)
+            num_binned = int(len(depths) / n_gauss)
+            intermediate_lambdas = np.zeros(num_binned)
+            intermediate_depths = np.zeros(num_binned)
+
+            for chunk in range(num_binned):
+                start = chunk * n_gauss
+                end = (chunk + 1 ) * n_gauss
+                intermediate_depths[chunk] = np.sum(depths[start : end] * weights)
+
             intermediate_lambdas = unbinned_lambdas[::n_gauss]
             intermediate_stellar_spectrum = stellar_spectrum[::n_gauss]
             intermediate_correction_factors = correction_factors[::n_gauss]
@@ -110,80 +106,18 @@ class TransitDepthCalculator:
         binned_wavelengths = []
         binned_depths = []
         binned_stellar_spectrum = []
-
-        if self.atm.method == "xsec" and self._xsec_bin_bounds is not None:
-            bin_ranges = self._xsec_bin_bounds
-        else:
-            bin_ranges = []
-            for start, end in self.atm.wavelength_bins:
-                l = int(xp.cpu(xp.searchsorted(intermediate_lambdas, start)))
-                r = int(xp.cpu(xp.searchsorted(intermediate_lambdas, end)))
-                bin_ranges.append((l, r))
-
-        for l, r in bin_ranges:
+        
+        for (start, end) in xp.cpu(self.atm.wavelength_bins):
+            l = np.searchsorted(intermediate_lambdas, start)
+            r = np.searchsorted(intermediate_lambdas, end)
             
-            binned_wavelengths.append(xp.mean(intermediate_lambdas[l:r]))
-            binned_depth = xp.average(intermediate_depths[l:r] * intermediate_correction_factors[l:r],
+            binned_wavelengths.append(np.mean(intermediate_lambdas[l:r]))
+            binned_depth = np.average(intermediate_depths[l:r] * intermediate_correction_factors[l:r],
                                       weights=intermediate_stellar_spectrum[l:r])
             binned_depths.append(binned_depth)
-            binned_stellar_spectrum.append(xp.median(intermediate_stellar_spectrum[l:r]))
+            binned_stellar_spectrum.append(np.median(intermediate_stellar_spectrum[l:r]))
 
-        return xp.asarray(binned_wavelengths), xp.asarray(binned_depths), xp.asarray(binned_stellar_spectrum), xp.asarray(intermediate_lambdas), xp.asarray(intermediate_depths), xp.asarray(intermediate_stellar_spectrum), xp.asarray(intermediate_correction_factors)
-
-    def _get_binned_depths_only(self, depths, T_star, T_spot,
-                                spot_cov_frac, blackbody=False, n_gauss=10):
-        depths = xp.asarray(depths)
-        unbinned_lambdas = self.atm.lambda_grid
-        stellar_spectrum, correction_factors = self.atm.get_stellar_spectrum(
-            T_star, T_spot, spot_cov_frac, blackbody)
-
-        if self.atm.method == "ktables":
-            _, weights = scipy.special.roots_legendre(n_gauss)
-            weights = xp.asarray(weights / 2)
-            intermediate_depths = bin_ktables_vectorized(depths, weights, n_gauss)
-            intermediate_lambdas = unbinned_lambdas[::n_gauss]
-            intermediate_stellar_spectrum = stellar_spectrum[::n_gauss]
-            intermediate_correction_factors = correction_factors[::n_gauss]
-        elif self.atm.method == "xsec":
-            intermediate_lambdas = unbinned_lambdas
-            intermediate_depths = depths
-            intermediate_stellar_spectrum = stellar_spectrum
-            intermediate_correction_factors = correction_factors
-        else:
-            assert(False)
-
-        corrected_depths = intermediate_depths * intermediate_correction_factors
-        if self.atm.wavelength_bins is None:
-            return xp.array(intermediate_lambdas), xp.array(corrected_depths)
-
-        if self.atm.method == "xsec" and self._xsec_bin_left_indices is not None and self._xsec_bin_right_indices is not None:
-            left = self._xsec_bin_left_indices
-            right = self._xsec_bin_right_indices
-            prefix_l = xp.concatenate([xp.asarray([0.0]), xp.cumsum(intermediate_lambdas)])
-            prefix_w = xp.concatenate([xp.asarray([0.0]), xp.cumsum(intermediate_stellar_spectrum)])
-            prefix_dw = xp.concatenate([xp.asarray([0.0]), xp.cumsum(corrected_depths * intermediate_stellar_spectrum)])
-
-            lambda_sums = prefix_l[right] - prefix_l[left]
-            counts = right - left
-            binned_wavelengths = lambda_sums / counts
-
-            weight_sums = prefix_w[right] - prefix_w[left]
-            weighted_depth_sums = prefix_dw[right] - prefix_dw[left]
-            binned_depths = weighted_depth_sums / weight_sums
-            return xp.asarray(binned_wavelengths), xp.asarray(binned_depths)
-
-        binned_wavelengths = []
-        binned_depths = []
-        for start, end in self.atm.wavelength_bins:
-            l = int(xp.cpu(xp.searchsorted(intermediate_lambdas, start)))
-            r = int(xp.cpu(xp.searchsorted(intermediate_lambdas, end)))
-            binned_wavelengths.append(xp.mean(intermediate_lambdas[l:r]))
-            binned_depth = xp.average(
-                corrected_depths[l:r],
-                weights=intermediate_stellar_spectrum[l:r])
-            binned_depths.append(binned_depth)
-
-        return xp.asarray(binned_wavelengths), xp.asarray(binned_depths)
+        return xp.array(binned_wavelengths), xp.array(binned_depths), xp.array(binned_stellar_spectrum), xp.array(intermediate_lambdas), xp.array(intermediate_depths), xp.array(intermediate_stellar_spectrum), xp.array(intermediate_correction_factors)
 
     def _validate_params(self, T, logZ, CO_ratio, cloudtop_pressure):
         T_profile = xp.ones(NUM_LAYERS) * T
@@ -347,8 +281,7 @@ class TransitDepthCalculator:
             scattering_factor, scattering_slope, scattering_ref_wavelength,
             add_collisional_absorption, cloudtop_pressure, custom_abundances,
             T_star, T_spot, spot_cov_frac, ri, frac_scale_height,
-            number_density, part_size, part_size_std, P_quench, zero_opacities=zero_opacities,
-            include_atm_abundances=full_output)
+            number_density, part_size, part_size_std, P_quench, zero_opacities=zero_opacities)
 
         radii = atm_info["radii"]
         dr = atm_info["dr"]
@@ -361,11 +294,7 @@ class TransitDepthCalculator:
         
         #For correlated-k: transit_depths has n_gauss points for every wavelength; unbinned_depths
         #has 1 point for every wavelength
-        if full_output:
-            binned_wavelengths, binned_depths, binned_stellar_spectrum, unbinned_wavelengths, unbinned_depths, unbinned_stellar_spectrum, unbinned_correction_factors = self._get_binned_corrected_depths(transit_depths, T_star, T_spot, spot_cov_frac, stellar_blackbody)
-        else:
-            binned_wavelengths, binned_depths = self._get_binned_depths_only(
-                transit_depths, T_star, T_spot, spot_cov_frac, stellar_blackbody)
+        binned_wavelengths, binned_depths, binned_stellar_spectrum, unbinned_wavelengths, unbinned_depths, unbinned_stellar_spectrum, unbinned_correction_factors = self._get_binned_corrected_depths(transit_depths, T_star, T_spot, spot_cov_frac, stellar_blackbody)
         
         if full_output:
             atm_info["tau_los"] = xp.cpu(tau_los)
@@ -407,43 +336,42 @@ class TransitDepthCalculator:
         the clear-sky model to cache the gas absorption, then computes the cloudy
         model reusing the cached data, and finally combines them.
         """
-        # Tell AtmosphereSolver to cache the gas absorption computed for the clear case
+        # Cache should only be active within this call, even if an exception occurs.
         self.atm.cache_gas_absorption = True
         self.atm.cache_scattering_base = True
         self.atm.cache_profile_quantities = True
+        try:
+            # First, compute clear atmosphere to populate cache
+            wavelengths_clear, depths_clear, _ = self.compute_depths(
+                t_p_profile, star_radius, planet_mass, planet_radius,
+                logZ, CO_ratio, CH4_mult, gases, vmrs,log_SO2, log_CH4, add_gas_absorption, add_H_minus_absorption,
+                True, 1, 4, scattering_ref_wavelength,
+                add_collisional_absorption, xp.inf, custom_abundances,
+                custom_T_profile, custom_P_profile,
+                T_star, T_spot, spot_cov_frac,
+                None, 1, 0, # ri, frac_scale_height, number_density for clear
+                part_size, part_size_std, P_quench,
+                False, # full_output=False, we don't need the info dict
+                min_abundance, min_cross_sec, stellar_blackbody, zero_opacities)
 
-        # First, compute clear atmosphere to populate cache
-        wavelengths_clear, depths_clear, _ = self.compute_depths(
-            t_p_profile, star_radius, planet_mass, planet_radius,
-            logZ, CO_ratio, CH4_mult, gases, vmrs,log_SO2, log_CH4, add_gas_absorption, add_H_minus_absorption,
-            True, 1, 4, scattering_ref_wavelength,
-            add_collisional_absorption, xp.inf, custom_abundances,
-            custom_T_profile, custom_P_profile,
-            T_star, T_spot, spot_cov_frac,
-            None, 1, 0, # ri, frac_scale_height, number_density for clear
-            part_size, part_size_std, P_quench,
-            False, # full_output=False, we don't need the info dict
-            min_abundance, min_cross_sec, stellar_blackbody, zero_opacities)
-
-        # Now compute cloudy atmosphere, which will reuse cache
-        wavelengths_cloudy, depths_cloudy, info_cloudy = self.compute_depths(
-            t_p_profile, star_radius, planet_mass, planet_radius,
-            logZ, CO_ratio, CH4_mult, gases, vmrs, log_SO2, log_CH4, add_gas_absorption, add_H_minus_absorption,
-            add_scattering,
-            scattering_factor, scattering_slope, scattering_ref_wavelength,
-            add_collisional_absorption, cloudtop_pressure, custom_abundances,
-            custom_T_profile, custom_P_profile,
-            T_star, T_spot, spot_cov_frac, ri, frac_scale_height,
-            number_density, part_size, part_size_std, P_quench,
-            full_output, min_abundance, min_cross_sec, stellar_blackbody, zero_opacities)
-
-        # Reset cache state
-        self.atm.cache_gas_absorption = False
-        self.atm.gas_absorption_cache = None
-        self.atm.cache_scattering_base = False
-        self.atm.scattering_base_cache = None
-        self.atm.cache_profile_quantities = False
-        self.atm.profile_quantities_cache = None
+            # Now compute cloudy atmosphere, which will reuse cache
+            wavelengths_cloudy, depths_cloudy, info_cloudy = self.compute_depths(
+                t_p_profile, star_radius, planet_mass, planet_radius,
+                logZ, CO_ratio, CH4_mult, gases, vmrs, log_SO2, log_CH4, add_gas_absorption, add_H_minus_absorption,
+                add_scattering,
+                scattering_factor, scattering_slope, scattering_ref_wavelength,
+                add_collisional_absorption, cloudtop_pressure, custom_abundances,
+                custom_T_profile, custom_P_profile,
+                T_star, T_spot, spot_cov_frac, ri, frac_scale_height,
+                number_density, part_size, part_size_std, P_quench,
+                full_output, min_abundance, min_cross_sec, stellar_blackbody, zero_opacities)
+        finally:
+            self.atm.cache_gas_absorption = False
+            self.atm.gas_absorption_cache = None
+            self.atm.cache_scattering_base = False
+            self.atm.scattering_base_cache = None
+            self.atm.cache_profile_quantities = False
+            self.atm.profile_quantities_cache = None
 
         final_depths = cloud_cov_frac * depths_cloudy + (1 - cloud_cov_frac) * depths_clear
 
