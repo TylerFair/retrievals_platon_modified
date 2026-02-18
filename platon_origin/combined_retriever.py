@@ -272,7 +272,6 @@ class CombinedRetriever:
             return calculated_transit_depths, transit_info_dict, calculated_eclipse_depths, eclipse_info_dict
 
         if lnlike_per_point:
-            self.params_to_lnlike[tuple(params)] = ln_likelihood
             return ln_likelihood
 
         return ln_likelihood_sum
@@ -282,15 +281,9 @@ class CombinedRetriever:
                  measured_transit_errors, measured_eclipse_depths,
                  measured_eclipse_errors, zero_opacities=[]):
         
-        lnlike_per_point = self._ln_like(params, transit_calc, eclipse_calc, fit_info, measured_transit_depths,
+        ln_like = self._ln_like(params, transit_calc, eclipse_calc, fit_info, measured_transit_depths,
                                 measured_transit_errors, measured_eclipse_depths,
-                                measured_eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=True)
-        
-        if not np.isscalar(lnlike_per_point):
-            ln_like = lnlike_per_point.sum()
-        else:
-            assert(lnlike_per_point == -np.inf)
-            ln_like = -np.inf
+                                measured_eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=False)
 
         if not np.isfinite(ln_like) or ln_like < -1e30:
             ln_like = -1e30
@@ -419,7 +412,15 @@ class CombinedRetriever:
             if eclipse_depths is not None:
                 retrieval_result.random_eclipse_depths.append(eclipse_info["unbinned_eclipse_depths"])
                 retrieval_result.random_TP_profiles.append(np.array([eclipse_info["P_profile"], eclipse_info["T_profile"]]))
-            retrieval_result.pointwise_lnlikes.append(self.params_to_lnlike[tuple(params)])
+            lnlike_pp = self._ln_like(
+                params, transit_calc, eclipse_calc, fit_info,
+                transit_depths, transit_errors,
+                eclipse_depths, eclipse_errors,
+                lnlike_per_point=True
+            )
+            if np.isscalar(lnlike_pp):  # -np.inf
+                continue
+            retrieval_result.pointwise_lnlikes.append(lnlike_pp)
         retrieval_result.loo_total, retrieval_result.loos, retrieval_result.loo_ks = psisloo(np.array(retrieval_result.pointwise_lnlikes))
 
         return retrieval_result
@@ -515,12 +516,8 @@ class CombinedRetriever:
             return new_cube
 
         def dynesty_ln_like(cube):
-            lnlike_per_point = self._ln_like(cube, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
-                                    eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=True)
-            if not np.isscalar(lnlike_per_point):
-                ln_like = lnlike_per_point.sum()
-            else:
-                ln_like = lnlike_per_point
+            ln_like = self._ln_like(cube, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
+                                    eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=False)
             
             if not np.isfinite(ln_like) or ln_like < -1e30:
                 ln_like = -1e30
@@ -580,7 +577,15 @@ class CombinedRetriever:
             if eclipse_depths is not None:
                 retrieval_result.random_eclipse_depths.append(eclipse_info["unbinned_eclipse_depths"])
                 retrieval_result.random_TP_profiles.append(np.array([eclipse_info["P_profile"], eclipse_info["T_profile"]]))
-            retrieval_result.pointwise_lnlikes.append(self.params_to_lnlike[tuple(params)])
+            lnlike_pp = self._ln_like(
+                params, transit_calc, eclipse_calc, fit_info,
+                transit_depths, transit_errors,
+                eclipse_depths, eclipse_errors,
+                lnlike_per_point=True
+            )
+            if np.isscalar(lnlike_pp):  # -np.inf
+                continue
+            retrieval_result.pointwise_lnlikes.append(lnlike_pp)
 
         #Calculate LOO-CV scores
         retrieval_result.loo_total, retrieval_result.loos, retrieval_result.loo_ks = psisloo(np.array(retrieval_result.pointwise_lnlikes))
@@ -618,12 +623,8 @@ class CombinedRetriever:
             return new_cube
 
         def multinest_ln_like(cube):
-            lnlike_per_point = self._ln_like(cube, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
-                                    eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=True)
-            if not np.isscalar(lnlike_per_point):
-                ln_like = lnlike_per_point.sum()
-            else:
-                ln_like = lnlike_per_point
+            ln_like = self._ln_like(cube, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
+                                    eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=False)
 
             if not np.isfinite(ln_like) or ln_like < -1e30:
                 ln_like = -1e30
@@ -755,12 +756,8 @@ class CombinedRetriever:
                 return transformed
     
         def ultranest_ln_like(params):
-            lnlike_per_point = self._ln_like(params, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
-                                    eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=True)
-            if not np.isscalar(lnlike_per_point):
-                ln_like = lnlike_per_point.sum()
-            else:
-                ln_like = lnlike_per_point
+            ln_like = self._ln_like(params, transit_calc, eclipse_calc, fit_info, transit_depths, transit_errors,
+                                    eclipse_depths, eclipse_errors, zero_opacities=zero_opacities, lnlike_per_point=False)
 
             if not np.isfinite(ln_like) or ln_like < -1e30:
                 ln_like = -1e30
@@ -910,5 +907,4 @@ class CombinedRetriever:
         
         fit_info = FitInfo(all_variables)
         return fit_info
-
 
