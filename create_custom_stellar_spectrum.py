@@ -8,7 +8,7 @@ from astropy.constants import h, c
 import pysynphot as S 
 from spectres import spectres 
 
-def create_stellar_grid_data(logg, feh):
+def create_stellar_grid_data(logg, feh, startag):
     def air_to_vac(wavelength):
         """
         Implements the air to vacuum wavelength conversion described in eqn 65 of
@@ -84,7 +84,7 @@ def create_stellar_grid_data(logg, feh):
     output_spectra['temperatures'] = np.array(temps)
     output_spectra['spectra'] = np.array(spectra)
 
-    with open("/Users/tyler/Downloads/SRA/platon/platon/data/stellar_spectra.pkl", "wb") as f:
+    with open(f"/Users/tyler/Downloads/SRA/platon/platon/data/{startag}", "wb") as f:
         pickle.dump(output_spectra, f)
 
         
