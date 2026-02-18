@@ -600,6 +600,7 @@ class CombinedRetriever:
                       maxiter=None, maxcall=None, nlive=250,
                       num_final_samples=1000, zero_opacities=[],
                       basename=False, resume=False, dump_callback=None,
+                      startag='stellar_spectra.pkl',
                       **dynesty_kwargs):
         import pymultinest
         
@@ -608,7 +609,7 @@ class CombinedRetriever:
         eclipse_calc = None
         if transit_bins is not None:
             transit_calc = TransitDepthCalculator(
-                include_condensation=include_condensation, method=rad_method)
+                include_condensation=include_condensation, method=rad_method, startag=startag)
             transit_calc.change_wavelength_bins(transit_bins)
             self._validate_params(fit_info, transit_calc)
         if eclipse_bins is not None:
