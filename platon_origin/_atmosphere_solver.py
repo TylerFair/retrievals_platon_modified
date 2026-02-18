@@ -35,7 +35,7 @@ class AtmosphereSolver:
             method, include_opacities, downsample)
 
         self.low_res_lambdas = load_numpy("data/low_res_lambdas.npy")
-        self.stellar_spectra_dict = load_dict_from_pickle(f"data/stars/{startag}")                    
+        self.stellar_spectra_dict = load_dict_from_pickle(f"data/{startag}")                    
         
         if method == "xsec":
             self.lambda_grid = xp.copy(load_numpy("data/wavelengths.npy")[::downsample])
