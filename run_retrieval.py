@@ -23,6 +23,7 @@ T_eq = 852
 T_star = 4803
 logg = 4.5
 feh = 0.1
+startag = 'HAT-P-18_stellar_spectra.pkl'
 #create custom stellar grid 
 # then do export PYSYN_CDBS=/Users/tyler/Downloads/SRA/platon/platon/data/grp/redcat/trds/ (put the donwloaded models in data )
 # or export PYSYN_CDBS=/home/tyler/hard_disk/platon/platon/data/grp/redcat/trds/
@@ -30,7 +31,7 @@ generate_stellar_grid = False
 
 if generate_stellar_grid:
     from platon.create_custom_stellar_spectrum import create_stellar_grid_data
-    create_stellar_grid_data(logg, feh)
+    create_stellar_grid_data(logg, feh, startag)
 
 profile_type = 'radiative_solution'  # 'isothermal', 'parametric'
 
@@ -109,13 +110,13 @@ all_gases = general_gases
 
 fit_info.add_gases_vmr(all_gases, 1e-12, 1e-1)
 
-result = retriever.run_ultranest(bins, depths, errors,
+result = retriever.run_multinest(bins, depths, errors,
                                  None, None, None,
                                  fit_info,
                                  #sample="rwalk",
-                                 #rad_method="xsec",
-                                 #nlive=250
-                                 nsteps=50
+                                 rad_method="xsec",
+                                 nlive=250
+                                 startag=startag
                                  )
 with open("retrieval_result_hatp18b_ultranest.pkl", "wb") as f:
     pickle.dump(result, f)
