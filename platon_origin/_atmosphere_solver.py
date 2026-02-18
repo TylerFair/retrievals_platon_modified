@@ -20,7 +20,10 @@ from .errors import AtmosphereError
 from ._interpolator_3D import regular_grid_interp, interp1d
 
 class AtmosphereSolver:
-    def __init__(self, include_condensation=True, ref_pressure=1e5, method='xsec', include_opacities=[], downsample=1):
+    def __init__(self, include_condensation=True, ref_pressure=1e5, method='xsec', include_opacities=[], downsample=1, startag='stellar_spectra.pkl'):
+        '''
+        startag: pkl file with stellar spectra generated from create_custom_stellar_spectrum.py
+        '''
         self.arguments = locals()
         del self.arguments["self"]
 
@@ -32,7 +35,7 @@ class AtmosphereSolver:
             method, include_opacities, downsample)
 
         self.low_res_lambdas = load_numpy("data/low_res_lambdas.npy")
-        self.stellar_spectra_dict = load_dict_from_pickle("data/stellar_spectra.pkl")                    
+        self.stellar_spectra_dict = load_dict_from_pickle(f"data/stars/{startag}")                    
         
         if method == "xsec":
             self.lambda_grid = xp.copy(load_numpy("data/wavelengths.npy")[::downsample])
