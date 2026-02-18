@@ -22,36 +22,6 @@ class Plotter():
     def __init__(self):
         pass
 
-    @staticmethod
-    def _get_equal_samples(retrieval_result):
-        retrieval_type = retrieval_result.retrieval_type
-        if retrieval_type == "dynesty":
-            equal_samples = dynesty.utils.resample_equal(
-                retrieval_result.samples, retrieval_result.weights)
-        elif retrieval_type in ("pymultinest", "nautilus", "pocomc", "ultranest"):
-            if hasattr(retrieval_result, "equal_samples"):
-                equal_samples = np.array(retrieval_result.equal_samples, copy=True)
-            elif hasattr(retrieval_result, "samples") and hasattr(retrieval_result, "weights"):
-                probs = np.array(retrieval_result.weights, dtype=float)
-                probs = probs / np.sum(probs)
-                idx = np.random.choice(
-                    len(retrieval_result.samples),
-                    size=len(retrieval_result.samples),
-                    replace=True,
-                    p=probs,
-                )
-                equal_samples = np.array(retrieval_result.samples[idx], copy=True)
-            elif hasattr(retrieval_result, "samples"):
-                equal_samples = np.array(retrieval_result.samples, copy=True)
-            else:
-                raise ValueError("No posterior samples available for retrieval type '{}'".format(retrieval_type))
-        elif retrieval_type == "emcee":
-            equal_samples = np.array(retrieval_result.flatchain, copy=True)
-        else:
-            raise ValueError("Unsupported retrieval type '{}'".format(retrieval_type))
-        equal_samples = np.atleast_2d(equal_samples)
-        np.random.shuffle(equal_samples)
-        return equal_samples
 
     def plot_retrieval_TP_profiles(self, retrieval_result, plot_samples=False, plot_1sigma_bounds=True, num_samples=100, prefix=None):
         """
@@ -59,7 +29,15 @@ class Plotter():
         and 1 sigma bounds for the profile and/or plot samples of the temperature profile.
         """
         assert(isinstance(retrieval_result, RetrievalResult))
-        equal_samples = self._get_equal_samples(retrieval_result)
+        if retrieval_result.retrieval_type == "dynesty":
+            equal_samples = dynesty.utils.resample_equal(retrieval_result.samples, retrieval_result.weights)
+            np.random.shuffle(equal_samples)
+        elif retrieval_result.retrieval_type == "pymultinest":
+            equal_samples = retrieval_result.equal_samples
+        elif retrieval_result.retrieval_type == "emcee":
+            equal_samples = np.copy(retrieval_result.flatchain)
+        else:
+            assert(False)
 
         indices = np.random.choice(len(equal_samples), num_samples)
         profile_type = retrieval_result.fit_info.all_params['profile_type'].best_guess
@@ -106,28 +84,17 @@ class Plotter():
                                 range=[0.99] * retrieval_result.samples.shape[1],
                                 show_titles=True,
                                 labels=retrieval_result.fit_info.fit_param_names, **args)
-        elif retrieval_result.retrieval_type == "nautilus":
-            if hasattr(retrieval_result, "samples") and hasattr(retrieval_result, "logw"):
-                logw = np.asarray(retrieval_result.logw, dtype=float)
-                weights = np.exp(logw - np.max(logw))
-                fig = corner.corner(retrieval_result.samples, weights=weights,
-                                    range=[0.99] * retrieval_result.samples.shape[1],
-                                    show_titles=True,
-                                    labels=retrieval_result.fit_info.fit_param_names, **args)
-            else:
-                equal_samples = self._get_equal_samples(retrieval_result)
-                fig = corner.corner(equal_samples,
-                                    range=[0.99] * equal_samples.shape[1],
-                                    show_titles=True,
-                                    labels=retrieval_result.fit_info.fit_param_names, **args)
-        elif retrieval_result.retrieval_type in ("pymultinest", "pocomc", "ultranest", "emcee"):
-            equal_samples = self._get_equal_samples(retrieval_result)
-            fig = corner.corner(equal_samples,
-                                range=[0.99] * equal_samples.shape[1],
+        elif retrieval_result.retrieval_type == "pymultinest":
+            fig = corner.corner(retrieval_result.equal_samples,
+                                range=[0.99] * retrieval_result.equal_samples.shape[1],
                                 show_titles=True,
+                                labels=retrieval_result.fit_info.fit_param_names, **args)                
+        elif retrieval_result.retrieval_type == "emcee":
+            fig = corner.corner(retrieval_result.flatchain,
+                                range=[0.99] * retrieval_result.flatchain.shape[1],
                                 labels=retrieval_result.fit_info.fit_param_names, **args)
         else:
-            raise ValueError("Unsupported retrieval type '{}'".format(retrieval_result.retrieval_type))
+            assert(False)
 
         if filename is not None:
             fig.savefig(filename)
