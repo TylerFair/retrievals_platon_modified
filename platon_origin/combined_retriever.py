@@ -229,7 +229,8 @@ class CombinedRetriever:
         CH4_mult = 10.**params_dict["log_CH4_mult"]
         log_SO2 = params_dict['log_SO2']
         log_CH4 = params_dict['log_CH4']
-        log_TiO = params_dict.get('log_TiO', None)
+        log_TiO = params_dict['log_TiO']
+        add_H_minus_absorption = bool(params_dict.get("add_H_minus_absorption", False))
 
         if params_dict["fit_vmr"]:
             assert(logZ is None and CO_ratio is None)
@@ -280,6 +281,7 @@ class CombinedRetriever:
                         custom_abundances=None,
                         CH4_mult=CH4_mult, gases=gases, vmrs=vmrs,
                         log_SO2=log_SO2, log_CH4=log_CH4, log_TiO=log_TiO,
+                        add_H_minus_absorption=add_H_minus_absorption,
                         scattering_factor=scatt_factor, scattering_slope=scatt_slope,
                         cloudtop_pressure=cloudtop_P, T_star=T_star,
                         T_spot=T_spot, spot_cov_frac=spot_cov_frac,
@@ -290,6 +292,7 @@ class CombinedRetriever:
                         t_p_profile, Rs, Mp, Rp, logZ, CO_ratio, CH4_mult, gases, vmrs,
                         custom_abundances=None,
                         log_SO2=log_SO2, log_CH4=log_CH4, log_TiO=log_TiO,
+                        add_H_minus_absorption=add_H_minus_absorption,
                         scattering_factor=scatt_factor, scattering_slope=scatt_slope,
                         cloudtop_pressure=cloudtop_P, T_star=T_star,
                         T_spot=T_spot, spot_cov_frac=spot_cov_frac,
@@ -925,6 +928,7 @@ class CombinedRetriever:
     @staticmethod
     def get_default_fit_info(Rs, Mp, Rp, logZ=0, CO_ratio=0.53, log_CH4_mult=0,
                              free_retrieval=False,
+                             add_H_minus_absorption=False,
                              log_cloudtop_P=np.inf, log_scatt_factor=0,
                              scatt_slope=4, error_multiple=1, T_star=None,
                              T_spot=None, spot_cov_frac=None, cloud_cov_frac=1.0,
