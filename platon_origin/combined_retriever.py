@@ -53,7 +53,7 @@ class CombinedRetriever:
             elif abs(value) < 1e4: format_str = "{:.2f}"
             else: format_str = "{:.2e}"
 
-            if name in ["offset_transit", "offset_niriss", "offset_miri", "offset_eclipse"]:
+            if name.startswith("offset_") and not name.endswith("_start") and not name.endswith("_end"):
                 unit = "ppm"
                 value *= 1e6
             
@@ -134,6 +134,69 @@ class CombinedRetriever:
         vmrs_with_bkg = np.exp(clrs_with_bkg + np.log(geometric_mean))
         assert(np.around(np.sum(vmrs_with_bkg), decimals=5) == 1)
         return vmrs_with_bkg
+
+    @staticmethod
+    def _get_transit_offset_windows(params_dict, spectrum_length):
+        windows = {}
+
+        def add_window(offset_name, start, end):
+            if offset_name not in params_dict:
+                return
+            try:
+                i_start = int(start)
+                i_end = int(end)
+            except (TypeError, ValueError):
+                return
+            i_start = max(0, min(i_start, spectrum_length))
+            i_end = max(0, min(i_end, spectrum_length))
+            if i_end <= i_start:
+                return
+            windows[offset_name] = (i_start, i_end)
+
+        explicit_windows = params_dict.get("transit_offset_windows")
+        if isinstance(explicit_windows, dict):
+            for offset_name, bounds in explicit_windows.items():
+                if isinstance(bounds, dict):
+                    add_window(offset_name, bounds.get("start"), bounds.get("end"))
+                elif isinstance(bounds, (tuple, list)) and len(bounds) == 2:
+                    add_window(offset_name, bounds[0], bounds[1])
+
+        for key in params_dict:
+            if not key.startswith("offset_") or key.endswith("_start") or key.endswith("_end"):
+                continue
+            if key == "offset_eclipse":
+                continue
+            start_key = key + "_start"
+            end_key = key + "_end"
+            if start_key in params_dict and end_key in params_dict:
+                add_window(key, params_dict[start_key], params_dict[end_key])
+
+        if "offset_transit" in params_dict and "offset_start" in params_dict and "offset_end" in params_dict:
+            add_window("offset_transit", params_dict["offset_start"], params_dict["offset_end"])
+
+        return windows.items()
+
+    @staticmethod
+    def _has_dynamic_transit_offset_indices(fit_info):
+        # If index boundaries are themselves fitted, we must re-evaluate every call.
+        for name in fit_info.fit_param_names:
+            if name.endswith("_start") or name.endswith("_end"):
+                return True
+        return False
+
+    def _get_transit_offset_ops(self, fit_info, params_dict, spectrum_length):
+        if self._has_dynamic_transit_offset_indices(fit_info):
+            return tuple(self._get_transit_offset_windows(params_dict, spectrum_length))
+
+        windows_obj = params_dict.get("transit_offset_windows")
+        cache_key = (id(fit_info), spectrum_length, id(windows_obj))
+        cache = getattr(self, "_transit_offset_ops_cache", None)
+        if cache is not None and cache.get("key") == cache_key:
+            return cache["ops"]
+
+        ops = tuple(self._get_transit_offset_windows(params_dict, spectrum_length))
+        self._transit_offset_ops_cache = {"key": cache_key, "ops": ops}
+        return ops
     def _ln_like(self, params, transit_calc, eclipse_calc, fit_info, measured_transit_depths,
                  measured_transit_errors, measured_eclipse_depths,
                  measured_eclipse_errors, ret_best_fit=False,
@@ -166,6 +229,7 @@ class CombinedRetriever:
         CH4_mult = 10.**params_dict["log_CH4_mult"]
         log_SO2 = params_dict['log_SO2']
         log_CH4 = params_dict['log_CH4']
+        log_TiO = params_dict.get('log_TiO', None)
 
         if params_dict["fit_vmr"]:
             assert(logZ is None and CO_ratio is None)
@@ -215,7 +279,7 @@ class CombinedRetriever:
                         logZ=logZ, CO_ratio=CO_ratio,
                         custom_abundances=None,
                         CH4_mult=CH4_mult, gases=gases, vmrs=vmrs,
-                        log_SO2=log_SO2, log_CH4=log_CH4,
+                        log_SO2=log_SO2, log_CH4=log_CH4, log_TiO=log_TiO,
                         scattering_factor=scatt_factor, scattering_slope=scatt_slope,
                         cloudtop_pressure=cloudtop_P, T_star=T_star,
                         T_spot=T_spot, spot_cov_frac=spot_cov_frac,
@@ -225,15 +289,20 @@ class CombinedRetriever:
                     transit_wavelengths, calculated_transit_depths, transit_info_dict = transit_calc.compute_depths(
                         t_p_profile, Rs, Mp, Rp, logZ, CO_ratio, CH4_mult, gases, vmrs,
                         custom_abundances=None,
-                        log_SO2=log_SO2, log_CH4=log_CH4,
+                        log_SO2=log_SO2, log_CH4=log_CH4, log_TiO=log_TiO,
                         scattering_factor=scatt_factor, scattering_slope=scatt_slope,
                         cloudtop_pressure=cloudtop_P, T_star=T_star,
                         T_spot=T_spot, spot_cov_frac=spot_cov_frac,
                         frac_scale_height=frac_scale_height, number_density=number_density,
                         part_size=part_size, ri=ri, P_quench=P_quench, full_output=ret_best_fit, zero_opacities=zero_opacities)
                     
-                #calculated_transit_depths[0 : 115] += params_dict["offset_niriss"]
-                #calculated_transit_depths[276: 317] += params_dict["offset_miri"]
+                for offset_name, (start, end) in self._get_transit_offset_ops(
+                        fit_info,
+                        params_dict, len(calculated_transit_depths)):
+                    offset_value = params_dict[offset_name]
+                    if not np.isscalar(offset_value) or not np.isfinite(offset_value):
+                        return -np.inf
+                    calculated_transit_depths[start:end] += offset_value
                 residuals = calculated_transit_depths - measured_transit_depths
                 scaled_errors = error_multiple * measured_transit_errors
                 ln_likelihood = np.append(ln_likelihood, -0.5 * (residuals**2 / scaled_errors**2 + np.log(2 * np.pi * scaled_errors**2)))
@@ -601,6 +670,7 @@ class CombinedRetriever:
                       num_final_samples=1000, zero_opacities=[],
                       basename=False, resume=False, dump_callback=None,
                       startag='stellar_spectra.pkl',
+		      niriss_index_start=None, niriss_index_end=None,
                       **dynesty_kwargs):
         import pymultinest
         
@@ -862,8 +932,9 @@ class CombinedRetriever:
                              log_number_density=-np.inf, log_part_size=-6,
                              n=None, log_k=-np.inf,
                              log_P_quench=-99,
+                             transit_offset_windows=None,
                              offset_transit=0,offset_niriss=0, offset_miri=0, offset_eclipse=0, offset_start=0, offset_end=sys.maxsize,
-                             fit_vmr=False, fit_clr=False,log_SO2=-10, log_CH4=-10,
+                             fit_vmr=False, fit_clr=False,log_SO2=-10, log_CH4=-10, log_TiO=None,
                              profile_type = 'isothermal', **profile_kwargs):
         '''Get a :class:`.FitInfo` object filled with best guess values.  A few
         parameters are required, but others can be set to default values if you
@@ -908,4 +979,3 @@ class CombinedRetriever:
         
         fit_info = FitInfo(all_variables)
         return fit_info
-
