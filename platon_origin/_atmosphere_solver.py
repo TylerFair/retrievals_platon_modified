@@ -417,7 +417,7 @@ class AtmosphereSolver:
         return radii, dr, atm_abundances, mu_profile
 
     def _get_abundances_array(self, logZ, CO_ratio, CH4_mult, custom_abundances, gases, vmrs,
-                                                    log_SO2=None, log_CH4=None):
+                                                    log_SO2=None, log_CH4=None, log_TiO=None):
         if custom_abundances is None and logZ is not None and CO_ratio is not None:
             abunds = self.abundance_getter.get(logZ, CO_ratio)
             abunds["CH4"] *= CH4_mult
@@ -426,6 +426,8 @@ class AtmosphereSolver:
                 abunds["SO2"] = xp.full_like(abunds["SO2"], 10**log_SO2)
             if log_CH4 is not None:
                 abunds["CH4"] = xp.full_like(abunds["CH4"], 10**log_CH4)
+            if log_TiO is not None:
+                abunds["TiO"] = xp.full_like(abunds["TiO"], 10**log_TiO)
 
             return abunds
 
@@ -525,7 +527,7 @@ class AtmosphereSolver:
                        P_profile, T_profile,
                        logZ=0, CO_ratio=0.53, CH4_mult=1,
                        gases=None, vmrs=None,
-                       log_SO2=None, log_CH4=None,
+                       log_SO2=None, log_CH4=None, log_TiO=None,
                        add_gas_absorption=True,
                        add_H_minus_absorption=False,
                        add_scattering=True, scattering_factor=1,
@@ -541,7 +543,7 @@ class AtmosphereSolver:
        
         abundances = self._get_abundances_array(
             logZ, CO_ratio, CH4_mult, custom_abundances, gases, vmrs, 
-            log_SO2=log_SO2, log_CH4=log_CH4)
+            log_SO2=log_SO2, log_CH4=log_CH4, log_TiO=log_TiO)
 
         T_quench = xp.interp(xp.log(P_quench), xp.log(P_profile), T_profile)
         for name in abundances:
