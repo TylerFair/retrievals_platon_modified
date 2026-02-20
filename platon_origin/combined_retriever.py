@@ -229,7 +229,7 @@ class CombinedRetriever:
         CH4_mult = 10.**params_dict["log_CH4_mult"]
         log_SO2 = params_dict['log_SO2']
         log_CH4 = params_dict['log_CH4']
-        log_TiO = params_dict['log_TiO']
+        log_TiO = params_dict.get('log_TiO', None)
         add_H_minus_absorption = bool(params_dict.get("add_H_minus_absorption", False))
 
         if params_dict["fit_vmr"]:
