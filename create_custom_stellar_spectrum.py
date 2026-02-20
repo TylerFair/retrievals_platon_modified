@@ -5,8 +5,45 @@ import os
 import pickle
 import astropy.units as u
 from astropy.constants import h, c
-import pysynphot as S 
-from spectres import spectres 
+#import pysynphot as S 
+#from spectres import spectres 
+import pymsg
+
+
+
+def _centers_to_edges(centers):
+    """Convert monotonic wavelength bin centers to bin edges."""
+    centers = np.asarray(centers, dtype=float)
+    if centers.ndim != 1 or len(centers) < 2:
+        raise ValueError("Need at least two wavelength centers.")
+    edges = np.empty(len(centers) + 1, dtype=float)
+    edges[1:-1] = np.sqrt(centers[:-1] * centers[1:])
+    edges[0] = centers[0] ** 2 / edges[1]
+    edges[-1] = centers[-1] ** 2 / edges[-2]
+    return edges
+
+
+def _norm_axis_label(label):
+    return "".join(ch for ch in label.lower() if ch.isalnum())
+
+
+def _make_msg_params(specgrid, temperature, feh, logg):
+    x = {}
+    for axis_label in specgrid.axis_labels:
+        key = _norm_axis_label(axis_label)
+        if key in ("teff", "temperature", "temp", "effectivetemperature"):
+            x[axis_label] = float(temperature)
+        elif key in ("logg", "surfacegravity", "log10g"):
+            x[axis_label] = float(logg)
+        elif key in ("feh", "mh", "metallicity", "met", "m"):
+            x[axis_label] = float(feh)
+        else:
+            raise KeyError(
+                f"Unsupported MSG axis '{axis_label}'. "
+                f"Expected something mappable to Teff/logg/[Fe/H]. "
+                f"Grid axes are: {specgrid.axis_labels}"
+            )
+    return x
 
 def create_stellar_grid_data(logg, feh, startag):
     def air_to_vac(wavelength):
@@ -17,12 +54,20 @@ def create_stellar_grid_data(logg, feh, startag):
         wlum = wavelength.to(u.um).value
         return (1 + 1e-6*(287.6155 + 1.62887/wlum**2 + 0.01360/wlum**4)) * wavelength
 
-    binned_wavelengths = np.load("../platon/data/low_res_lambdas.npy") #* u.meter
+    binned_wavelengths = np.load("../platon/data/low_res_lambdas.npy")  # meters (bin centers)
+    lam_edges_angstrom = _centers_to_edges(binned_wavelengths) * 1e10  # MSG expects Angstrom edges
 
     
     output_spectra = {}
     temps = []
     spectra = []
+
+    MSG_DIR = os.environ['MSG_DIR']
+    GRID_DIR = os.path.join(MSG_DIR, 'data', 'grids')
+
+    specgrid_file_name = os.path.join(GRID_DIR, 'sg-Goettingen-HiRes.h5')
+
+    specgrid = pymsg.SpecGrid(specgrid_file_name)
 
 
     for temperature in np.arange(3500, 12000, 100):
@@ -35,16 +80,12 @@ def create_stellar_grid_data(logg, feh, startag):
         #    wavelengths, spectrum = np.loadtxt(alt_filename, unpack=True)
         #else:
         #    continue
-        sp = S.Icat('ck04models', temperature, feh, logg) #S.Icat('phoenix', temperature, feh, logg)
-
-        sp.convert("m")                # Convert wavelengths to meter
-        sp.convert('flam')              # Convert to flux units (erg/s/cm^2/A)
         
-        wl_grid = sp.wave                         # Stellar wavelength array (m)
-        I_grid = (sp.flux*1e-7*1e4*1e10)/np.pi    # Convert to W/m^2/sr/m
-
-        # Bin / interpolate stellar spectrum to output wavelength grid
-        binned_spectrum = spectres(binned_wavelengths, wl_grid, I_grid)
+        # MSG equivalent of the old Icat path:
+        #   sp.flux [erg/s/cm^2/A] -> W/m^2/m, then divide by pi to get intensity-like quantity.
+        x = _make_msg_params(specgrid, temperature, feh, logg)
+        flux_grid = specgrid.flux(x=x, z=0.0, lam=lam_edges_angstrom, order=3)
+        binned_spectrum = (flux_grid * 1e-7 * 1e4 * 1e10) / np.pi
 
 
         '''
