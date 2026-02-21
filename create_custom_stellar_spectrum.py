@@ -129,7 +129,7 @@ def create_stellar_grid_data(logg, feh, startag):
     output_spectra['spectra'] = np.array(spectra)
     output_spectra['wavelengths_m'] = np.array(binned_wavelengths)
 
-    with open(f"/Users/tyler/Downloads/SRA/platon/platon/data/{startag}", "wb") as f:
+    with open(f"/project/ekempton/tfairnington/retrievals/platon/platon/data/{startag}", "wb") as f:
         pickle.dump(output_spectra, f)
 
         
