@@ -55,6 +55,9 @@ def create_stellar_grid_data(logg, feh, startag):
         return (1 + 1e-6*(287.6155 + 1.62887/wlum**2 + 0.01360/wlum**4)) * wavelength
 
     binned_wavelengths = np.load("../platon/data/low_res_lambdas.npy")  # meters (bin centers)
+    # clip to 5.5 microns (currently 30 )
+    binned_wavelengths = binned_wavelengths[binned_wavelengths < (5.5 * 1e-6)]
+
     lam_edges_angstrom = _centers_to_edges(binned_wavelengths) * 1e10  # MSG expects Angstrom edges
 
     
@@ -124,6 +127,7 @@ def create_stellar_grid_data(logg, feh, startag):
 
     output_spectra['temperatures'] = np.array(temps)
     output_spectra['spectra'] = np.array(spectra)
+    output_spectra['wavelengths_m'] = np.array(binned_wavelengths)
 
     with open(f"/Users/tyler/Downloads/SRA/platon/platon/data/{startag}", "wb") as f:
         pickle.dump(output_spectra, f)
